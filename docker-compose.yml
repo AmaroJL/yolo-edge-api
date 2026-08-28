@@ -1,6 +1,6 @@
 services:
   yolo-api:
-    image: ghcr.io/amarojunior/yolo-edge-api/yolo-api:latest	
+    image: ghcr.io/amarojunior/ghcr.io/amarojl/yolo-edge-api/yolo-api:sha-81321fa:latest
     build:
       context: .
       dockerfile: Dockerfile.api
