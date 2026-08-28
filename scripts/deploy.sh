@@ -1,51 +1,66 @@
-"""
-scripts/validate_model.py
-Quality gate: bloqueia o deploy se o mAP@0.5 estiver abaixo do limiar.
-Uso: python scripts/validate_model.py [--threshold 0.50]
-"""
-import argparse
-import sys
-from pathlib import Path
+#!/bin/bash
+# scripts/deploy.sh
+# Executa no Raspberry Pi via SSH pelo pipeline de CI/CD.
+# Faz pull da nova imagem, reinicia o serviço e valida o health check.
+# Em caso de falha, reverte para a imagem anterior automaticamente.
 
-# Limiar padrão de qualidade
-DEFAULT_THRESHOLD = 0.50
+set -euo pipefail
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model",     default="models/yolov8n.pt")
-    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
-    parser.add_argument("--dataset",   default=None,
-        help="Caminho para o YAML do dataset de validação (opcional)")
-    return parser.parse_args()
+DEPLOY_PATH="${DEPLOY_PATH:-~/yolo-edge-api}"
+HEALTH_URL="http://localhost:8000/health"
+HEALTH_RETRIES=6
+HEALTH_WAIT=10
 
-def main():
-    args = parse_args()
-    model_path = Path(args.model)
+echo "========================================"
+echo " Deploy — $(date '+%Y-%m-%d %H:%M:%S')"
+echo "========================================"
+
+cd "$DEPLOY_PATH"
+
+# ── Salva a imagem atual para possível rollback ──────────────
+PREVIOUS=$(docker inspect yolo-api \
+    --format '{{.Config.Image}}' 2>/dev/null || echo "none")
+echo "[INFO] Imagem atual: $PREVIOUS"
+
+# ── Baixa a nova imagem ──────────────────────────────────────
+echo "[1/4] Baixando nova imagem..."
+docker compose pull
+
+# ── Sobe a nova versão ───────────────────────────────────────
+echo "[2/4] Iniciando nova versão..."
+docker compose up -d
+
+# ── Aguarda o serviço estabilizar ────────────────────────────
+echo "[3/4] Aguardando health check ($((HEALTH_RETRIES * HEALTH_WAIT))s max)..."
+SUCCESS=false
+for i in $(seq 1 $HEALTH_RETRIES); do
+    sleep $HEALTH_WAIT
+    if curl -sf "$HEALTH_URL" > /dev/null 2>&1; then
+        SUCCESS=true
+        break
+    fi
+    echo "  Tentativa $i/$HEALTH_RETRIES falhou, aguardando..."
+done
+
+# ── Avalia o resultado ───────────────────────────────────────
+if [ "$SUCCESS" = true ]; then
+    echo "[4/4] Health check OK"
+    NEW=$(docker inspect yolo-api --format '{{.Config.Image}}' 2>/dev/null)
+    echo ""
+    echo "[OK] Deploy bem-sucedido: $NEW"
+    exit 0
+else
+    echo "[ERRO] Health check falhou após $((HEALTH_RETRIES * HEALTH_WAIT))s"
     
-    if not model_path.exists():
-        print(f"[ERRO] Modelo não encontrado: {model_path}")
-        sys.exit(1)
+    if [ "$PREVIOUS" != "none" ]; then
+        echo "[ROLLBACK] Revertendo para: $PREVIOUS"
+        docker compose down
         
-    from ultralytics import YOLO
-    model = YOLO(str(model_path))
-    
-    # Sem dataset explícito, usa o dataset interno do modelo pré-treinado
-    if args.dataset:
-        print(f"[INFO] Validando com dataset: {args.dataset}")
-        metrics = model.val(data=args.dataset, split="val", verbose=False)
-    else:
-        # Validação rápida com COCO128 (dataset embutido no ultralytics)
-        print("[INFO] Validando com COCO128 (dataset padrão)")
-        metrics = model.val(data="coco128.yaml", split="val", verbose=False)
-        
-    map50 = float(metrics.box.map50)
-    print(f"[INFO] mAP@0.5 = {map50:.4f}  |  Limiar: {args.threshold:.4f}")
-    
-    if map50 < args.threshold:
-        print(f"[FALHA] mAP abaixo do limiar. Deploy bloqueado.")
-        sys.exit(1)
-        
-    print(f"[OK] Quality gate aprovado. Deploy autorizado.")
-
-if __name__ == "__main__":
-    main()
+        # Retorna para a imagem anterior
+        IMAGE=$PREVIOUS docker compose up -d
+        echo "[ROLLBACK] Concluído. Serviço restaurado."
+    else
+        echo "[AVISO] Sem imagem anterior para rollback."
+    fi
+    exit 1
+fi
