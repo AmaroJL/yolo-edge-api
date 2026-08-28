@@ -1,8 +1,9 @@
 import base64
 import io
-import time
 import json
+import time
 import uuid
+
 
 def log_event(event: str, level: str = "INFO", **kwargs):
     """Emite um evento estruturado em JSON para stdout."""
