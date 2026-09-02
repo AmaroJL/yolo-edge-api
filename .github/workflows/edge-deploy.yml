@@ -124,15 +124,16 @@ jobs:
           echo "${{ secrets.RPI_SSH_KEY }}" | tr -d '\r' > ~/.ssh/dvc_key
           chmod 600 ~/.ssh/dvc_key
           dvc remote modify --local local_remote keyfile ~/.ssh/dvc_key
-          dvc pull
+          dvc pull models/yolo-epi.pt
       - name: Recuperar dataset via DVC
-  	run: dvc pull dataset/exports/epi-v1
+        run: |
+          dvc pull dataset/exports/epi-v1
       - name: Executar quality gate com dataset customizado
-  	run: |
-    	  python scripts/validate_model.py \
-          --model models/yolo-epi.pt \
-          --dataset dataset/exports/epi-v1/data.yaml \
-          --threshold 0.60
+        run: |
+          python scripts/validate_model.py \
+            --model models/yolo-epi.pt \
+            --dataset dataset/exports/epi-v1/data.yaml \
+            --threshold 0.60
   # ─────────────────────────────────────────────────────────
   # JOB 4: Deploy no Raspberry Pi 5 via SSH
   # Executa apenas em push para main (não em PRs)
